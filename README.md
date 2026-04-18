@@ -1,5 +1,7 @@
 # pi-portal
 
+**Documentation:** [pi-portal on GitHub Pages](https://PlebeiusGaragicus.github.io/pi-portal/) (built from `docs/` via MkDocs).
+
 Local web UI for managing **[dot-mi](https://github.com/PlebeiusGaragicus/dot-mi)** **standalone agents** (`agents/<name>/`): browse agents, edit `SYSTEM.md`, `pi-args`, and optional files, add or remove symlinks to shared extensions and skills, and create or delete agents (same behavior as `./setup.sh create-agent`).
 
 **Scope (v1):** standalone agents only. Teams under `teams/` are not managed here.
