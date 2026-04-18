@@ -31,6 +31,9 @@ type EditorTab =
 
 type MainTab = "files" | "extensions" | "skills";
 
+/** Optional prompt/workspace files — only shown as tabs when on disk or user adds via UI. */
+const OPTIONAL_FILE_TABS: EditorTab[] = ["APPEND_SYSTEM.md", "AGENT.md", "workspace.conf"];
+
 export function App() {
 	const [dotMiRoot, setDotMiRoot] = useState<string>("");
 	const [agents, setAgents] = useState<AgentListItem[]>([]);
@@ -56,6 +59,8 @@ export function App() {
 	const [modalWorkspace, setModalWorkspace] = useState(false);
 	const [deleteConfirm, setDeleteConfirm] = useState("");
 	const [busy, setBusy] = useState(false);
+	/** Optional paths the user is creating before first save (tab visible until file exists on disk). */
+	const [pendingOptional, setPendingOptional] = useState<EditorTab[]>([]);
 
 	const refreshAgents = useCallback(async () => {
 		const list = await fetchAgents();
@@ -96,6 +101,7 @@ export function App() {
 			setMainTab("files");
 			setTab("SYSTEM.md");
 			setFileDirty(false);
+			setPendingOptional([]);
 			try {
 				setLoadErr(null);
 				const d = await fetchAgent(id);
@@ -107,6 +113,62 @@ export function App() {
 		},
 		[refreshLinks],
 	);
+
+	/** Drop pending entries once the file exists (e.g. after save refreshes detail). */
+	useEffect(() => {
+		if (!detail) return;
+		setPendingOptional((prev) =>
+			prev.filter((id) => {
+				if (id === "APPEND_SYSTEM.md") return !detail.optionalFiles.appendSystem;
+				if (id === "AGENT.md") return !detail.optionalFiles.agentMd;
+				if (id === "workspace.conf") return !detail.workspace;
+				return true;
+			}),
+		);
+	}, [detail]);
+
+	const visibleFileTabs = useMemo((): { id: EditorTab; label: string }[] => {
+		const base: { id: EditorTab; label: string }[] = [
+			{ id: "SYSTEM.md", label: "SYSTEM.md" },
+			{ id: "pi-args", label: "pi-args" },
+		];
+		if (!detail) return base;
+		const includeOptional = (id: EditorTab, label: string) => {
+			const onDisk =
+				id === "APPEND_SYSTEM.md"
+					? detail.optionalFiles.appendSystem
+					: id === "AGENT.md"
+						? detail.optionalFiles.agentMd
+						: id === "workspace.conf"
+							? detail.workspace
+							: false;
+			const pending = pendingOptional.includes(id);
+			if (onDisk || pending) base.push({ id, label });
+		};
+		includeOptional("APPEND_SYSTEM.md", "APPEND_SYSTEM.md");
+		includeOptional("AGENT.md", "AGENT.md");
+		includeOptional("workspace.conf", "workspace.conf");
+		return base;
+	}, [detail, pendingOptional]);
+
+	const addableOptionalFiles = useMemo(() => {
+		if (!detail) return [];
+		return OPTIONAL_FILE_TABS.filter((id) => {
+			const onDisk =
+				id === "APPEND_SYSTEM.md"
+					? detail.optionalFiles.appendSystem
+					: id === "AGENT.md"
+						? detail.optionalFiles.agentMd
+						: detail.workspace;
+			return !onDisk && !pendingOptional.includes(id);
+		});
+	}, [detail, pendingOptional]);
+
+	const visibleTabIds = useMemo(() => new Set(visibleFileTabs.map((t) => t.id)), [visibleFileTabs]);
+
+	useEffect(() => {
+		if (!visibleTabIds.has(tab)) setTab("SYSTEM.md");
+	}, [tab, visibleTabIds]);
 
 	useEffect(() => {
 		if (!selectedId || mainTab !== "files") return;
@@ -175,6 +237,7 @@ export function App() {
 			setDeleteConfirm("");
 			setSelectedId(null);
 			setDetail(null);
+			setPendingOptional([]);
 			await refreshAgents();
 		} catch (e) {
 			setLoadErr(e instanceof Error ? e.message : String(e));
@@ -242,13 +305,11 @@ export function App() {
 		}
 	};
 
-	const editorTabs: { id: EditorTab; label: string }[] = [
-		{ id: "SYSTEM.md", label: "SYSTEM.md" },
-		{ id: "pi-args", label: "pi-args" },
-		{ id: "APPEND_SYSTEM.md", label: "APPEND_SYSTEM.md" },
-		{ id: "AGENT.md", label: "AGENT.md" },
-		{ id: "workspace.conf", label: "workspace.conf" },
-	];
+	const startOptionalFile = (id: EditorTab) => {
+		if (!OPTIONAL_FILE_TABS.includes(id)) return;
+		setPendingOptional((prev) => (prev.includes(id) ? prev : [...prev, id]));
+		setTab(id);
+	};
 
 	return (
 		<div className="layout">
@@ -325,7 +386,7 @@ export function App() {
 						{mainTab === "files" ? (
 							<section className="panel">
 								<div className="tabs">
-									{editorTabs.map((t) => (
+									{visibleFileTabs.map((t) => (
 										<button
 											key={t.id}
 											type="button"
@@ -336,6 +397,30 @@ export function App() {
 										</button>
 									))}
 								</div>
+								{addableOptionalFiles.length > 0 ? (
+									<div className="add-row" style={{ marginBottom: "0.75rem" }}>
+										<label htmlFor="add-optional" className="hint" style={{ marginRight: "0.35rem" }}>
+											Add optional file:
+										</label>
+										<select
+											id="add-optional"
+											aria-label="Add optional file"
+											defaultValue=""
+											onChange={(ev) => {
+												const v = ev.target.value as EditorTab;
+												ev.target.value = "";
+												if (v && OPTIONAL_FILE_TABS.includes(v)) startOptionalFile(v);
+											}}
+										>
+											<option value="">Choose…</option>
+											{addableOptionalFiles.map((id) => (
+												<option key={id} value={id}>
+													{id}
+												</option>
+											))}
+										</select>
+									</div>
+								) : null}
 								{fileMissing ? (
 									<p className="hint">File did not exist — saving will create it.</p>
 								) : null}
