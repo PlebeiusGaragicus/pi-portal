@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	addExtensionLink,
 	addSkillLink,
@@ -21,18 +21,21 @@ import {
 	removeSkillLink,
 	saveFile,
 } from "./api";
-
-type EditorTab =
-	| "SYSTEM.md"
-	| "pi-args"
-	| "APPEND_SYSTEM.md"
-	| "AGENT.md"
-	| "workspace.conf";
-
-type MainTab = "files" | "extensions" | "skills";
+import {
+	buildHash,
+	parseHash,
+	replaceHash,
+	type EditorTab,
+	type MainTab,
+} from "./hashRoute";
 
 /** Optional prompt/workspace files — only shown as tabs when on disk or user adds via UI. */
 const OPTIONAL_FILE_TABS: EditorTab[] = ["APPEND_SYSTEM.md", "AGENT.md", "workspace.conf"];
+
+type SelectAgentNav = {
+	mainTab?: MainTab;
+	fileTab?: EditorTab;
+};
 
 export function App() {
 	const [dotMiRoot, setDotMiRoot] = useState<string>("");
@@ -62,6 +65,10 @@ export function App() {
 	/** Optional paths the user is creating before first save (tab visible until file exists on disk). */
 	const [pendingOptional, setPendingOptional] = useState<EditorTab[]>([]);
 
+	const applyingHashRef = useRef(false);
+	const hashHydratedRef = useRef(false);
+	const initialRouteDoneRef = useRef(false);
+
 	const refreshAgents = useCallback(async () => {
 		const list = await fetchAgents();
 		setAgents(list);
@@ -80,6 +87,51 @@ export function App() {
 		setSkillCatalog(sk);
 	}, []);
 
+	const selectAgent = useCallback(
+		async (id: string, nav?: SelectAgentNav) => {
+			setSelectedId(id);
+			setDetail(null);
+			setSaveStatus(null);
+			setFileDirty(false);
+
+			const fromNav = Boolean(nav);
+			const nextMain = nav?.mainTab ?? "files";
+			const nextFile = nav?.fileTab ?? "SYSTEM.md";
+
+			setMainTab(fromNav ? nextMain : "files");
+			setTab("SYSTEM.md");
+			setPendingOptional([]);
+
+			try {
+				setLoadErr(null);
+				const d = await fetchAgent(id);
+				setDetail(d);
+				await refreshLinks(id);
+
+				if (nextMain === "files") {
+					const ft = fromNav ? nextFile : "SYSTEM.md";
+					if (OPTIONAL_FILE_TABS.includes(ft)) {
+						const onDisk =
+							ft === "APPEND_SYSTEM.md"
+								? d.optionalFiles.appendSystem
+								: ft === "AGENT.md"
+									? d.optionalFiles.agentMd
+									: d.workspace;
+						if (!onDisk) {
+							setPendingOptional((p) => (p.includes(ft) ? p : [...p, ft]));
+						}
+					}
+					setTab(ft);
+				} else {
+					setTab("SYSTEM.md");
+				}
+			} catch (e) {
+				setLoadErr(e instanceof Error ? e.message : String(e));
+			}
+		},
+		[refreshLinks],
+	);
+
 	useEffect(() => {
 		(async () => {
 			try {
@@ -94,34 +146,111 @@ export function App() {
 		})();
 	}, [loadCatalogs, refreshAgents]);
 
-	const selectAgent = useCallback(
-		async (id: string) => {
-			setSelectedId(id);
-			setSaveStatus(null);
-			setMainTab("files");
-			setTab("SYSTEM.md");
-			setFileDirty(false);
-			setPendingOptional([]);
-			try {
-				setLoadErr(null);
-				const d = await fetchAgent(id);
-				setDetail(d);
-				await refreshLinks(id);
-			} catch (e) {
-				setLoadErr(e instanceof Error ? e.message : String(e));
+	/** Initial hash → agent selection (once agents are loaded). */
+	useEffect(() => {
+		if (initialRouteDoneRef.current || agents.length === 0) return;
+
+		void (async () => {
+			const parsed = parseHash(window.location.hash);
+			if (parsed.type === "home") {
+				initialRouteDoneRef.current = true;
+				hashHydratedRef.current = true;
+				return;
 			}
-		},
-		[refreshLinks],
-	);
+
+			if (!agents.some((a) => a.id === parsed.agentId)) {
+				setLoadErr(`Unknown agent in URL: ${parsed.agentId}`);
+				applyingHashRef.current = true;
+				replaceHash("#/");
+				applyingHashRef.current = false;
+				initialRouteDoneRef.current = true;
+				hashHydratedRef.current = true;
+				return;
+			}
+
+			await selectAgent(parsed.agentId, {
+				mainTab: parsed.mainTab,
+				fileTab: parsed.fileTab,
+			});
+			initialRouteDoneRef.current = true;
+			hashHydratedRef.current = true;
+		})();
+	}, [agents, selectAgent]);
+
+	/** Browser back/forward or manual hash edits. */
+	useEffect(() => {
+		const onHashChange = () => {
+			if (applyingHashRef.current) return;
+			const parsed = parseHash(window.location.hash);
+			if (parsed.type === "home") {
+				setSelectedId(null);
+				setDetail(null);
+				setPendingOptional([]);
+				setMainTab("files");
+				setTab("SYSTEM.md");
+				setLoadErr(null);
+				return;
+			}
+			if (!agents.some((a) => a.id === parsed.agentId)) {
+				setLoadErr(`Unknown agent in URL: ${parsed.agentId}`);
+				return;
+			}
+
+			/** Same agent already loaded: update tabs only (avoid clearing detail). */
+			if (selectedId === parsed.agentId && detail?.id === parsed.agentId) {
+				const nextMain = parsed.mainTab;
+				setMainTab(nextMain);
+				if (nextMain === "files") {
+					const ft = parsed.fileTab;
+					if (OPTIONAL_FILE_TABS.includes(ft)) {
+						const onDisk =
+							ft === "APPEND_SYSTEM.md"
+								? detail.optionalFiles.appendSystem
+								: ft === "AGENT.md"
+									? detail.optionalFiles.agentMd
+									: detail.workspace;
+						if (!onDisk) {
+							setPendingOptional((p) => (p.includes(ft) ? p : [...p, ft]));
+						}
+					}
+					setTab(ft);
+				} else {
+					setTab("SYSTEM.md");
+				}
+				setLoadErr(null);
+				return;
+			}
+
+			void selectAgent(parsed.agentId, {
+				mainTab: parsed.mainTab,
+				fileTab: parsed.fileTab,
+			});
+		};
+		window.addEventListener("hashchange", onHashChange);
+		return () => window.removeEventListener("hashchange", onHashChange);
+	}, [agents, selectAgent, selectedId, detail]);
+
+	/** Keep URL hash in sync with selection (after first hydrate). */
+	useEffect(() => {
+		if (!hashHydratedRef.current || applyingHashRef.current) return;
+		const h = buildHash(selectedId, mainTab, tab);
+		if (window.location.hash !== h) {
+			applyingHashRef.current = true;
+			replaceHash(h);
+			queueMicrotask(() => {
+				applyingHashRef.current = false;
+			});
+		}
+	}, [selectedId, mainTab, tab]);
 
 	/** Drop pending entries once the file exists (e.g. after save refreshes detail). */
 	useEffect(() => {
 		if (!detail) return;
 		setPendingOptional((prev) =>
-			prev.filter((id) => {
-				if (id === "APPEND_SYSTEM.md") return !detail.optionalFiles.appendSystem;
-				if (id === "AGENT.md") return !detail.optionalFiles.agentMd;
-				if (id === "workspace.conf") return !detail.workspace;
+			prev.filter((pid) => {
+				if (pid === "APPEND_SYSTEM.md") return !detail.optionalFiles.appendSystem;
+				if (pid === "AGENT.md") return !detail.optionalFiles.agentMd;
+				if (pid === "workspace.conf") return !detail.workspace;
 				return true;
 			}),
 		);
@@ -238,6 +367,11 @@ export function App() {
 			setSelectedId(null);
 			setDetail(null);
 			setPendingOptional([]);
+			applyingHashRef.current = true;
+			replaceHash("#/");
+			queueMicrotask(() => {
+				applyingHashRef.current = false;
+			});
 			await refreshAgents();
 		} catch (e) {
 			setLoadErr(e instanceof Error ? e.message : String(e));

@@ -15,6 +15,18 @@ npm run dev
 
 Under **Files**, tabs for optional paths (`APPEND_SYSTEM.md`, `AGENT.md`, `workspace.conf`) appear only when that file exists on disk, or after you use **Add optional file** to create one.
 
+## URL hash (refresh and deep links)
+
+The UI syncs to the fragment so **refresh** restores the selected agent, main section (Files / Extensions / Skills), and file tab when you are on Files.
+
+Examples:
+
+- `#/` — no agent selected
+- `#/agent/my-agent/extensions` — Extensions for `my-agent`
+- `#/agent/my-agent/files/pi-args` — Files editor on `pi-args`
+
+Segments are URL-encoded. Unknown agents in the hash show an error and reset the hash to `#/`.
+
 ## Production (single process)
 
 Build the SPA, then start the server with static serving enabled:
